@@ -321,6 +321,7 @@ pub const Arguments = struct {
         clap.parseParam("-t, --test-name-pattern <STR>    Run only tests with a name that matches the given regex.") catch unreachable,
         clap.parseParam("--reporter <STR>                 Specify the test reporter. Currently --reporter=junit is the only supported format.") catch unreachable,
         clap.parseParam("--reporter-outfile <STR>         The output file used for the format from --reporter.") catch unreachable,
+        clap.parseParam("--silent                         Prevent tests from printing messages to the console") catch unreachable,
     };
     pub const test_params = test_only_params ++ runtime_params_ ++ transpiler_params_ ++ base_params_;
 
@@ -609,6 +610,7 @@ pub const Arguments = struct {
             ctx.test_options.update_snapshots = args.flag("--update-snapshots");
             ctx.test_options.run_todo = args.flag("--todo");
             ctx.test_options.only = args.flag("--only");
+            ctx.test_options.silent = args.flag("--silent");
         }
 
         ctx.args.absolute_working_dir = cwd;
@@ -1527,6 +1529,7 @@ pub const Command = struct {
         bail: u32 = 0,
         coverage: TestCommand.CodeCoverageOptions = .{},
         test_filter_regex: ?*RegularExpression = null,
+        silent: bool = false,
 
         file_reporter: ?TestCommand.FileReporter = null,
         reporter_outfile: ?[]const u8 = null,

@@ -608,16 +608,18 @@ pub const CommandLineReporter = struct {
     }
 
     pub fn handleTestPass(cb: *TestRunner.Callback, id: Test.ID, file: string, label: string, expectations: u32, elapsed_ns: u64, parent: ?*jest.DescribeScope) void {
-        const writer_ = Output.errorWriter();
-        var buffered_writer = std.io.bufferedWriter(writer_);
-        var writer = buffered_writer.writer();
-        defer buffered_writer.flush() catch unreachable;
-
         var this: *CommandLineReporter = @fieldParentPtr("callback", cb);
 
-        writeTestStatusLine(.pass, &writer);
+        if (!this.jest.test_options.silent) {
+            const writer_ = Output.errorWriter();
+            var buffered_writer = std.io.bufferedWriter(writer_);
+            var writer = buffered_writer.writer();
+            defer buffered_writer.flush() catch unreachable;
 
-        printTestLine(.pass, label, elapsed_ns, parent, expectations, false, writer, file, this.file_reporter);
+            writeTestStatusLine(.pass, &writer);
+
+            printTestLine(.pass, label, elapsed_ns, parent, expectations, false, writer, file, this.file_reporter);
+        }
 
         this.jest.tests.items(.status)[id] = TestRunner.Test.Status.pass;
         this.summary.pass += 1;
@@ -625,25 +627,28 @@ pub const CommandLineReporter = struct {
     }
 
     pub fn handleTestFail(cb: *TestRunner.Callback, id: Test.ID, file: string, label: string, expectations: u32, elapsed_ns: u64, parent: ?*jest.DescribeScope) void {
-        var writer_ = Output.errorWriter();
         var this: *CommandLineReporter = @fieldParentPtr("callback", cb);
 
-        // when the tests fail, we want to repeat the failures at the end
-        // so that you can see them better when there are lots of tests that ran
-        const initial_length = this.failures_to_repeat_buf.items.len;
-        var writer = this.failures_to_repeat_buf.writer(bun.default_allocator);
+        if (!this.jest.test_options.silent) {
+            var writer_ = Output.errorWriter();
 
-        writeTestStatusLine(.fail, &writer);
-        printTestLine(.fail, label, elapsed_ns, parent, expectations, false, writer, file, this.file_reporter);
+            // when the tests fail, we want to repeat the failures at the end
+            // so that you can see them better when there are lots of tests that ran
+            const initial_length = this.failures_to_repeat_buf.items.len;
+            var writer = this.failures_to_repeat_buf.writer(bun.default_allocator);
 
-        // We must always reset the colors because (skip) will have set them to <d>
-        if (Output.enable_ansi_colors_stderr) {
-            writer.writeAll(Output.prettyFmt("<r>", true)) catch unreachable;
+            writeTestStatusLine(.fail, &writer);
+            printTestLine(.fail, label, elapsed_ns, parent, expectations, false, writer, file, this.file_reporter);
+
+            // We must always reset the colors because (skip) will have set them to <d>
+            if (Output.enable_ansi_colors_stderr) {
+                writer.writeAll(Output.prettyFmt("<r>", true)) catch unreachable;
+            }
+
+            writer_.writeAll(this.failures_to_repeat_buf.items[initial_length..]) catch unreachable;
+
+            Output.flush();
         }
-
-        writer_.writeAll(this.failures_to_repeat_buf.items[initial_length..]) catch unreachable;
-
-        Output.flush();
 
         // this.updateDots();
         this.summary.fail += 1;
@@ -651,18 +656,21 @@ pub const CommandLineReporter = struct {
         this.jest.tests.items(.status)[id] = TestRunner.Test.Status.fail;
 
         if (this.jest.bail == this.summary.fail) {
-            this.printSummary();
-            Output.prettyError("\nBailed out after {d} failure{s}<r>\n", .{ this.jest.bail, if (this.jest.bail == 1) "" else "s" });
+            if (!this.jest.test_options.silent) {
+                this.printSummary();
+                Output.prettyError("\nBailed out after {d} failure{s}<r>\n", .{ this.jest.bail, if (this.jest.bail == 1) "" else "s" });
+            }
             Global.exit(1);
         }
     }
 
     pub fn handleTestSkip(cb: *TestRunner.Callback, id: Test.ID, file: string, label: string, expectations: u32, elapsed_ns: u64, parent: ?*jest.DescribeScope) void {
-        var writer_ = Output.errorWriter();
         var this: *CommandLineReporter = @fieldParentPtr("callback", cb);
 
         // If you do it.only, don't report the skipped tests because its pretty noisy
-        if (jest.Jest.runner != null and !jest.Jest.runner.?.only) {
+        if (!this.jest.test_options.silent and jest.Jest.runner != null and !jest.Jest.runner.?.only) {
+            var writer_ = Output.errorWriter();
+
             // when the tests skip, we want to repeat the failures at the end
             // so that you can see them better when there are lots of tests that ran
             const initial_length = this.skips_to_repeat_buf.items.len;
@@ -682,20 +690,22 @@ pub const CommandLineReporter = struct {
     }
 
     pub fn handleTestTodo(cb: *TestRunner.Callback, id: Test.ID, file: string, label: string, expectations: u32, elapsed_ns: u64, parent: ?*jest.DescribeScope) void {
-        var writer_ = Output.errorWriter();
-
         var this: *CommandLineReporter = @fieldParentPtr("callback", cb);
 
-        // when the tests skip, we want to repeat the failures at the end
-        // so that you can see them better when there are lots of tests that ran
-        const initial_length = this.todos_to_repeat_buf.items.len;
-        var writer = this.todos_to_repeat_buf.writer(bun.default_allocator);
+        if (!this.jest.test_options.silent) {
+            var writer_ = Output.errorWriter();
 
-        writeTestStatusLine(.todo, &writer);
-        printTestLine(.todo, label, elapsed_ns, parent, expectations, true, writer, file, this.file_reporter);
+            // when the tests skip, we want to repeat the failures at the end
+            // so that you can see them better when there are lots of tests that ran
+            const initial_length = this.todos_to_repeat_buf.items.len;
+            var writer = this.todos_to_repeat_buf.writer(bun.default_allocator);
 
-        writer_.writeAll(this.todos_to_repeat_buf.items[initial_length..]) catch unreachable;
-        Output.flush();
+            writeTestStatusLine(.todo, &writer);
+            printTestLine(.todo, label, elapsed_ns, parent, expectations, true, writer, file, this.file_reporter);
+
+            writer_.writeAll(this.todos_to_repeat_buf.items[initial_length..]) catch unreachable;
+            Output.flush();
+        }
 
         // this.updateDots();
         this.summary.todo += 1;
@@ -704,11 +714,13 @@ pub const CommandLineReporter = struct {
     }
 
     pub fn printSummary(this: *CommandLineReporter) void {
-        const tests = this.summary.fail + this.summary.pass + this.summary.skip + this.summary.todo;
-        const files = this.summary.files;
+        if (!this.jest.test_options.silent) {
+            const tests = this.summary.fail + this.summary.pass + this.summary.skip + this.summary.todo;
+            const files = this.summary.files;
 
-        Output.prettyError("Ran {d} tests across {d} files. ", .{ tests, files });
-        Output.printStartEnd(bun.start_time, std.time.nanoTimestamp());
+            Output.prettyError("Ran {d} tests across {d} files. ", .{ tests, files });
+            Output.printStartEnd(bun.start_time, std.time.nanoTimestamp());
+        }
     }
 
     pub fn generateCodeCoverage(this: *CommandLineReporter, vm: *JSC.VirtualMachine, opts: *TestCommand.CodeCoverageOptions, comptime reporters: TestCommand.Reporters, comptime enable_ansi_colors: bool) !void {
@@ -1013,8 +1025,10 @@ pub const TestCommand = struct {
         Output.is_github_action = Output.isGithubAction();
 
         // print the version so you know its doing stuff if it takes a sec
-        Output.prettyln("<r><b>bun test <r><d>v" ++ Global.package_json_version_with_sha ++ "<r>", .{});
-        Output.flush();
+        if (!ctx.test_options.silent) {
+            Output.prettyln("<r><b>bun test <r><d>v" ++ Global.package_json_version_with_sha ++ "<r>", .{});
+            Output.flush();
+        }
 
         var env_loader = brk: {
             const map = try ctx.allocator.create(DotEnv.Map);
@@ -1225,88 +1239,92 @@ pub const TestCommand = struct {
         const write_snapshots_success = try jest.Jest.runner.?.snapshots.writeInlineSnapshots();
         try jest.Jest.runner.?.snapshots.writeSnapshotFile();
         var coverage_options = ctx.test_options.coverage;
-        if (reporter.summary.pass > 20) {
-            if (reporter.summary.skip > 0) {
-                Output.prettyError("\n<r><d>{d} tests skipped:<r>\n", .{reporter.summary.skip});
-                Output.flush();
-
-                var error_writer = Output.errorWriter();
-                error_writer.writeAll(reporter.skips_to_repeat_buf.items) catch unreachable;
-            }
-
-            if (reporter.summary.todo > 0) {
+        if (!ctx.test_options.silent) {
+            if (reporter.summary.pass > 20) {
                 if (reporter.summary.skip > 0) {
-                    Output.prettyError("\n", .{});
+                    Output.prettyError("\n<r><d>{d} tests skipped:<r>\n", .{reporter.summary.skip});
+                    Output.flush();
+
+                    var error_writer = Output.errorWriter();
+                    error_writer.writeAll(reporter.skips_to_repeat_buf.items) catch unreachable;
                 }
 
-                Output.prettyError("\n<r><d>{d} tests todo:<r>\n", .{reporter.summary.todo});
-                Output.flush();
+                if (reporter.summary.todo > 0) {
+                    if (reporter.summary.skip > 0) {
+                        Output.prettyError("\n", .{});
+                    }
 
-                var error_writer = Output.errorWriter();
-                error_writer.writeAll(reporter.todos_to_repeat_buf.items) catch unreachable;
-            }
+                    Output.prettyError("\n<r><d>{d} tests todo:<r>\n", .{reporter.summary.todo});
+                    Output.flush();
 
-            if (reporter.summary.fail > 0) {
-                if (reporter.summary.skip > 0 or reporter.summary.todo > 0) {
-                    Output.prettyError("\n", .{});
+                    var error_writer = Output.errorWriter();
+                    error_writer.writeAll(reporter.todos_to_repeat_buf.items) catch unreachable;
                 }
 
-                Output.prettyError("\n<r><d>{d} tests failed:<r>\n", .{reporter.summary.fail});
-                Output.flush();
+                if (reporter.summary.fail > 0) {
+                    if (reporter.summary.skip > 0 or reporter.summary.todo > 0) {
+                        Output.prettyError("\n", .{});
+                    }
 
-                var error_writer = Output.errorWriter();
-                error_writer.writeAll(reporter.failures_to_repeat_buf.items) catch unreachable;
+                    Output.prettyError("\n<r><d>{d} tests failed:<r>\n", .{reporter.summary.fail});
+                    Output.flush();
+
+                    var error_writer = Output.errorWriter();
+                    error_writer.writeAll(reporter.failures_to_repeat_buf.items) catch unreachable;
+                }
             }
+
+            Output.flush();
         }
 
-        Output.flush();
-
         if (test_files.len == 0) {
-            if (ctx.positionals.len == 0) {
-                Output.prettyErrorln(
-                    \\<yellow>No tests found!<r>
-                    \\Tests need ".test", "_test_", ".spec" or "_spec_" in the filename <d>(ex: "MyApp.test.ts")<r>
-                    \\
-                , .{});
-            } else {
-                Output.prettyErrorln("<yellow>The following filters did not match any test files:<r>", .{});
-                var has_file_like: ?usize = null;
-                Output.prettyError(" ", .{});
-                for (ctx.positionals[1..], 1..) |filter, i| {
-                    Output.prettyError(" {s}", .{filter});
+            if (!ctx.test_options.silent) {
+                if (ctx.positionals.len == 0) {
+                    Output.prettyErrorln(
+                        \\<yellow>No tests found!<r>
+                        \\Tests need ".test", "_test_", ".spec" or "_spec_" in the filename <d>(ex: "MyApp.test.ts")<r>
+                        \\
+                    , .{});
+                } else {
+                    Output.prettyErrorln("<yellow>The following filters did not match any test files:<r>", .{});
+                    var has_file_like: ?usize = null;
+                    Output.prettyError(" ", .{});
+                    for (ctx.positionals[1..], 1..) |filter, i| {
+                        Output.prettyError(" {s}", .{filter});
 
-                    if (has_file_like == null and
-                        (strings.hasSuffixComptime(filter, ".ts") or
-                            strings.hasSuffixComptime(filter, ".tsx") or
-                            strings.hasSuffixComptime(filter, ".js") or
-                            strings.hasSuffixComptime(filter, ".jsx")))
-                    {
-                        has_file_like = i;
+                        if (has_file_like == null and
+                            (strings.hasSuffixComptime(filter, ".ts") or
+                                strings.hasSuffixComptime(filter, ".tsx") or
+                                strings.hasSuffixComptime(filter, ".js") or
+                                strings.hasSuffixComptime(filter, ".jsx")))
+                        {
+                            has_file_like = i;
+                        }
+                    }
+                    if (search_count > 0) {
+                        Output.prettyError("\n{d} files were searched ", .{search_count});
+                        Output.printStartEnd(ctx.start_time, std.time.nanoTimestamp());
+                    }
+
+                    Output.prettyErrorln(
+                        \\
+                        \\
+                        \\<blue>note<r><d>:<r> Tests need ".test", "_test_", ".spec" or "_spec_" in the filename <d>(ex: "MyApp.test.ts")<r>
+                    , .{});
+
+                    // print a helpful note
+                    if (has_file_like) |i| {
+                        Output.prettyErrorln(
+                            \\<blue>note<r><d>:<r> To treat the "{s}" filter as a path, run "bun test ./{s}"<r>
+                        , .{ ctx.positionals[i], ctx.positionals[i] });
                     }
                 }
-                if (search_count > 0) {
-                    Output.prettyError("\n{d} files were searched ", .{search_count});
-                    Output.printStartEnd(ctx.start_time, std.time.nanoTimestamp());
-                }
-
-                Output.prettyErrorln(
+                Output.prettyError(
                     \\
-                    \\
-                    \\<blue>note<r><d>:<r> Tests need ".test", "_test_", ".spec" or "_spec_" in the filename <d>(ex: "MyApp.test.ts")<r>
+                    \\Learn more about the test runner: <magenta>https://bun.sh/docs/cli/test<r>
                 , .{});
-
-                // print a helpful note
-                if (has_file_like) |i| {
-                    Output.prettyErrorln(
-                        \\<blue>note<r><d>:<r> To treat the "{s}" filter as a path, run "bun test ./{s}"<r>
-                    , .{ ctx.positionals[i], ctx.positionals[i] });
-                }
             }
-            Output.prettyError(
-                \\
-                \\Learn more about the test runner: <magenta>https://bun.sh/docs/cli/test<r>
-            , .{});
-        } else {
+        } else if (!ctx.test_options.silent) {
             Output.prettyError("\n", .{});
 
             if (coverage_options.enabled) {
@@ -1336,14 +1354,8 @@ pub const TestCommand = struct {
             }
 
             if (reporter.summary.fail > 0) {
-                Output.prettyError("<r><red>", .{});
-            } else {
-                Output.prettyError("<r><d>", .{});
-            }
-
-            Output.prettyError(" {d:5>} fail<r>\n", .{reporter.summary.fail});
-            if (reporter.jest.unhandled_errors_between_tests > 0) {
-                Output.prettyError(" <r><red>{d:5>} error{s}<r>\n", .{ reporter.jest.unhandled_errors_between_tests, if (reporter.jest.unhandled_errors_between_tests > 1) "s" else "" });
+                Output.prettyError(" <r><red>{d:5>} fail<r>\n", .{reporter.summary.fail});
+                Output.prettyError("\n", .{});
             }
 
             var print_expect_calls = reporter.summary.expectations > 0;
@@ -1393,8 +1405,10 @@ pub const TestCommand = struct {
             reporter.printSummary();
         }
 
-        Output.prettyError("\n", .{});
-        Output.flush();
+        if (!ctx.test_options.silent) {
+            Output.prettyError("\n", .{});
+            Output.flush();
+        }
 
         if (reporter.file_reporter) |file_reporter| {
             switch (file_reporter) {
@@ -1515,12 +1529,14 @@ pub const TestCommand = struct {
         vm.onUnhandledRejection = jest.TestRunnerTask.onUnhandledRejection;
 
         while (repeat_index < repeat_count) : (repeat_index += 1) {
-            if (repeat_count > 1) {
-                Output.prettyErrorln("<r>\n{s}{s}: <d>(run #{d})<r>\n", .{ file_prefix, file_title, repeat_index + 1 });
-            } else {
-                Output.prettyErrorln("<r>\n{s}{s}:\n", .{ file_prefix, file_title });
+            if (!reporter.jest.test_options.silent) {
+                if (repeat_count > 1) {
+                    Output.prettyErrorln("<r>\n{s}{s}: <d>(run #{d})<r>\n", .{ file_prefix, file_title, repeat_index + 1 });
+                } else {
+                    Output.prettyErrorln("<r>\n{s}{s}:\n", .{ file_prefix, file_title });
+                }
+                Output.flush();
             }
-            Output.flush();
 
             var promise = try vm.loadEntryPointForTestRunner(file_path);
             reporter.summary.files += 1;
